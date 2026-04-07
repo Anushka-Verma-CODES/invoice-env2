@@ -1,18 +1,28 @@
 name: invoice-processing-env
 description: >
-  OpenEnv-compliant environment for invoice & receipt processing.
-  Agents must extract fields, categorize expenses, and detect anomalies.
+  OpenEnv-compliant Invoice & Receipt Processing Environment simulating real-world
+  financial workflows: field extraction, expense categorization, and anomaly detection.
+
+environment:
+  entrypoint: env/environment.py::InvoiceEnv
+  episode_definition: One episode is one batch of invoices.
 
 tasks:
-  - id: extraction
-    description: Extract vendor_name and invoice_date
+  - id: field_extraction
+    title: Field Extraction
     difficulty: easy
-  - id: categorization
-    description: Categorize invoice into Travel, Office Supplies, Utilities, Misc
+    description: Extract vendor_name and invoice_date from invoice data.
+    grading: Exact match gets 1.0, fuzzy match above 0.8 gets partial credit.
+  - id: expense_categorization
+    title: Expense Categorization
     difficulty: medium
+    description: Classify into Travel, Office Supplies, Utilities, or Misc.
+    grading: Correct is 1.0, close guess is 0.5 (supports optional top-2 format).
   - id: anomaly_detection
-    description: Detect duplicate invoices or unusually high amounts
+    title: Anomaly Detection
     difficulty: hard
+    description: Identify duplicate invoices and unusually high amounts.
+    grading: Continuous deterministic reward using precision, recall, and F1.
 
 schemas:
   observation: env/models.py::InvoiceObservation

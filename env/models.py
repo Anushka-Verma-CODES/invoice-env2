@@ -1,89 +1,89 @@
-from typing import Optional, Dict, Any
-from pydantic import BaseModel, validator
-import re
 from datetime import datetime
+from typing import Any, Dict, Optional
+
+from pydantic import BaseModel, field_validator
+
+
+ALLOWED_CATEGORIES = {"Travel", "Office Supplies", "Utilities", "Misc"}
 
 
 class InvoiceObservation(BaseModel):
-    """
-    Observation model for invoice environment.
-    Fields:
-    vendor_name (str): name of vendor (e.g., Amazon, Uber)
-    invoice_date (str): date in YYYY-MM-DD format
-    amount (float): invoice amount (non-negative)
-    description (str): textual description of expense
-    metadata (dict): auxiliary info (e.g., invoice id)
-    """
+    """Typed observation emitted by the environment at each step."""
+
     vendor_name: str
     invoice_date: str
     amount: float
     description: str
     metadata: Dict[str, Any]
 
-    @validator("vendor_name")
-    def vendor_not_empty(cls, v):
-        if not v.strip():
-            raise ValueError("Vendor name cannot be empty")
-        return v
+    @field_validator("vendor_name")
+    @classmethod
+    def vendor_name_not_empty(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("vendor_name cannot be empty")
+        return value
 
-    @validator("invoice_date")
-    def valid_date_format(cls, v):
-        # Accepts YYYY-MM-DD format
+    @field_validator("invoice_date")
+    @classmethod
+    def invoice_date_must_be_yyyy_mm_dd(cls, value: str) -> str:
         try:
-            datetime.strptime(v, "%Y-%m-%d")
-        except ValueError:
-            raise ValueError("Invoice date must be in YYYY-MM-DD format")
-        return v
+            datetime.strptime(value, "%Y-%m-%d")
+        except ValueError as exc:
+            raise ValueError("invoice_date must be in YYYY-MM-DD format") from exc
+        return value
 
-    @validator("amount")
-    def non_negative_amount(cls, v):
-        if v < 0:
-            raise ValueError("Invoice amount must be non-negative")
-        return v
+    @field_validator("amount")
+    @classmethod
+    def amount_must_be_non_negative(cls, value: float) -> float:
+        if value < 0:
+            raise ValueError("amount must be non-negative")
+        return value
 
 
 class InvoiceAction(BaseModel):
-    """
-    Action model for agent response.
-    Fields:
-    extracted_fields (dict): must include vendor_name and invoice_date
-    category (Optional[str]): one of {Travel, Office Supplies, Utilities, Misc}
-    anomaly_flag (Optional[bool]): True if anomaly detected
-    """
+    """Typed action sent by the agent."""
+
     extracted_fields: Dict[str, str]
     category: Optional[str] = None
     anomaly_flag: Optional[bool] = None
 
-    @validator("extracted_fields")
-    def must_contain_required_fields(cls, v):
+    @field_validator("extracted_fields")
+    @classmethod
+    def extracted_fields_must_contain_required_keys(cls, value: Dict[str, str]) -> Dict[str, str]:
         required = {"vendor_name", "invoice_date"}
-        missing = required - set(v.keys())
+        missing = required - set(value)
         if missing:
-            raise ValueError(f"Missing required extracted fields: {missing}")
-        return v
+            raise ValueError(f"Missing required extracted fields: {sorted(missing)}")
+        return value
 
-    @validator("category")
-    def valid_category(cls, v):
-        if v is None:
-            return v
-        allowed = {"Travel", "Office Supplies", "Utilities", "Misc"}
-        if v not in allowed:
-            raise ValueError(f"Category must be one of {allowed}")
-        return v
+    @field_validator("category")
+    @classmethod
+    def category_must_be_allowed(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+
+        # Support optional top-2 encoding as "CategoryA|CategoryB" or "CategoryA,CategoryB".
+        tokens = [piece.strip() for piece in value.replace("|", ",").split(",") if piece.strip()]
+        if not tokens:
+            raise ValueError("category cannot be empty")
+        if len(tokens) > 2:
+            raise ValueError("category supports at most 2 ranked guesses")
+
+        invalid = [item for item in tokens if item not in ALLOWED_CATEGORIES]
+        if invalid:
+            raise ValueError(f"category must be one of {sorted(ALLOWED_CATEGORIES)}")
+        return value
 
 
 class InvoiceReward(BaseModel):
-    """
-    Reward model for environment feedback.
-    Fields:
-    score (float): continuous reward between 0.0 and 1.0
-    details (dict): breakdown of extraction, category, anomaly scores
-    """
+    """Continuous reward object with a detailed breakdown."""
+
     score: float
     details: Dict[str, Any]
 
-    @validator("score")
-    def score_in_range(cls, v):
-        if not (0.0 <= v <= 1.0):
-            raise ValueError("Reward score must be between 0.0 and 1.0")
-        return v
+    @field_validator("score")
+    @classmethod
+    def score_must_be_between_zero_and_one(cls, value: float) -> float:
+        if not 0.0 <= value <= 1.0:
+            raise ValueError("score must be between 0.0 and 1.0")
+        return value
