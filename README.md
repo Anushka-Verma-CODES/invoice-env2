@@ -1,127 +1,135 @@
-# Invoice & Receipt Processing Environment
-
-An OpenEnv-compliant backend environment that simulates real-world invoice operations for AI agents. The agent must process a batch of invoices and solve three tasks per step:
-
-- Easy: Field extraction (`vendor_name`, `invoice_date`)
-- Medium: Expense categorization (`Travel`, `Office Supplies`, `Utilities`, `Misc`)
-- Hard: Anomaly detection (`duplicate_invoice`, `unusually_high_amount`)
-
-## Why This Matters
-
-Finance teams process high-volume invoices with variable formatting and risk exposure. This environment models common accounting automation challenges where an agent must:
-
-- Parse key fields reliably
-- Route expenses into correct ledger buckets
-- Catch suspicious entries before payment
-
-## OpenEnv Design
-
-The environment implements the required API:
-
 # Invoice & Receipt Processing Platform (OpenEnv + AI Agents)
 
-Production-ready, hackathon-grade SaaS-style platform for automated invoice intelligence.
+OpenEnv-compliant environment and full-stack app for invoice automation.
 
-This repository now includes:
+Core goal: train/evaluate agents to process invoices and receipts by solving three tasks in sequence:
 
-- OpenEnv simulation and deterministic graders
-- FastAPI backend with MongoDB integration
-- React + Vite + Tailwind frontend dashboard
-- OpenAI-driven batch agent execution with heuristic fallback mode
+1. Field extraction (easy)
+2. Expense categorization (medium)
+3. Anomaly detection (hard)
 
-## Product Overview
+## Problem Coverage
 
-Users can:
+### Task 1: Field Extraction (Easy)
 
-1. Load invoice batches from MongoDB
-2. Run invoice processing step-by-step or full-batch AI agent
-3. View extracted fields, category predictions, anomaly flags
-4. Track per-step and final scores
-5. Visualize score distributions in a dashboard chart
+- Observation: raw invoice fields and text context
+- Action: extract `vendor_name`, `invoice_date`
+- Reward: `+1` exact match; partial credit for fuzzy similarity `>= 0.8`
+- Grader: deterministic comparison against ground truth
 
-## Architecture Diagram (Text)
+### Task 2: Expense Categorization (Medium)
 
-```text
-[React Dashboard (Vite + Tailwind + Axios + Chart.js)]
-								|
-								v
-[FastAPI API Layer]
-	- /api/reset
-	- /api/step
-	- /api/state
-	- /api/run-agent
-	- /api/results
-								|
-								v
-[OpenEnv Runtime]
-	- observation/action/reward models
-	- deterministic graders
-	- weighted reward + penalties
-								|
-								v
-[MongoDB Atlas]
-	- invoices collection
-	- runs collection
+- Observation: vendor, description, line-item metadata
+- Action: assign category from `Travel`, `Office Supplies`, `Utilities`, `Misc`
+- Reward: `+1` exact match; `+0.5` if correct label appears in top-2 prediction
+- Grader: deterministic category check against labeled data
+
+### Task 3: Anomaly Detection (Hard)
+
+- Observation: invoice batch context (amount patterns, references, vendor/date behavior)
+- Action: set anomaly flag for duplicate/high-risk invoices
+- Reward: continuous score from precision/recall F1 behavior
+- Grader: deterministic scoring function derived from confusion counts
+
+## OpenEnv Models
+
+Implemented with Pydantic typed models:
+
+```python
+class InvoiceObservation(BaseModel):
+    vendor_name: str
+    invoice_date: str
+    amount: float
+    description: str
+    metadata: Dict[str, Any]
+
+class InvoiceAction(BaseModel):
+    extracted_fields: Dict[str, str]
+    category: Optional[str]
+    anomaly_flag: Optional[bool]
+
+class InvoiceReward(BaseModel):
+    score: float
+    details: Dict[str, Any]
 ```
+
+## Episode Definition
+
+One episode equals processing one invoice batch. Default behavior uses deterministic synthetic invoices with anomalies included.
+
+## Environment API
+
+The environment follows OpenEnv-style methods:
+
+- `reset()`
+- `step(action)`
+- `state()`
+
+Implementation entrypoint and schema wiring are defined in `openenv.yaml`.
 
 ## Repository Structure
 
 ```text
-root/
-├── backend/
-│   ├── env/
-│   ├── api/
-│   │   ├── routes.py
-│   │   ├── schemas.py
-│   │   └── services.py
-│   ├── db/
-│   │   └── mongo.py
-│   ├── main.py
-│   ├── requirements.txt
-│   └── render.yaml
-├── frontend/
-│   ├── src/
-│   │   ├── components/
-│   │   │   ├── InvoiceViewer.jsx
-│   │   │   ├── AgentOutput.jsx
-│   │   │   ├── ScoreBoard.jsx
-│   │   │   ├── ProgressBar.jsx
-│   │   │   └── Navbar.jsx
-│   │   ├── pages/
-│   │   │   └── Dashboard.jsx
-│   │   ├── services/api.js
-│   │   └── App.jsx
-│   ├── package.json
-│   └── vercel.json
-└── README.md
+.
+├── env/                     # Core OpenEnv runtime (models, graders, tasks, dataset)
+├── scripts/                 # Baseline agent runner (OpenAI + heuristic fallback)
+├── tests/                   # Model, grader, and environment tests
+├── backend/                 # FastAPI service + Mongo integration
+├── frontend/                # React/Vite/Tailwind dashboard
+├── openenv.yaml             # OpenEnv metadata and schema mapping
+├── Dockerfile               # Containerized baseline execution
+└── requirements.txt         # Core environment dependencies
 ```
 
-## Backend Setup (FastAPI)
+## Baseline Agent
 
-1. Create and activate a Python environment.
-2. Install backend dependencies.
+`scripts/run_baseline.py` supports:
+
+- `BASELINE_MODE=auto` (default): OpenAI if API key is present, otherwise heuristic
+- `BASELINE_MODE=openai`: strict OpenAI mode
+- `BASELINE_MODE=heuristic`: fully offline deterministic mode
+
+### Example
+
+```bash
+python scripts/run_baseline.py
+```
+
+Recent heuristic run output:
+
+- Steps: 12
+- Total score: 8.400
+- Average score: 0.700
+
+## Local Setup
+
+### Core Environment
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+python -m pytest -q
+python scripts/run_baseline.py
+```
+
+### Backend (FastAPI)
 
 ```bash
 cd backend
 pip install -r requirements.txt
-```
-
-3. Configure environment variables:
-
-```bash
-OPENAI_API_KEY=your_key_here
-MONGO_URI=your_mongo_uri
-MONGO_DB_NAME=invoice_platform
-FRONTEND_ORIGIN=http://localhost:5173
-```
-
-4. Start backend server:
-
-```bash
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-## Frontend Setup (React + Vite)
+Optional backend environment variables:
+
+- `OPENAI_API_KEY`
+- `OPENAI_MODEL` (default `gpt-4o-mini`)
+- `MONGO_URI`
+- `MONGO_DB_NAME`
+- `FRONTEND_ORIGIN`
+
+### Frontend (React + Vite)
 
 ```bash
 cd frontend
@@ -129,168 +137,51 @@ npm install
 npm run dev
 ```
 
-Frontend API base URL:
+Optional frontend environment variable:
 
-- `VITE_API_BASE_URL` (default: `http://localhost:8000/api`)
+- `VITE_API_BASE_URL` (default `http://localhost:8000/api`)
 
-## API Documentation
+## API Endpoints
 
-### POST /api/reset
+- `POST /api/reset`
+- `POST /api/step`
+- `GET /api/state`
+- `POST /api/run-agent`
+- `GET /api/results`
 
-Starts a new episode and loads a Mongo-backed invoice batch.
-
-Request:
-
-```json
-{
-	"batch_size": 12
-}
-```
-
-Response (sample):
-
-```json
-{
-	"observation": {
-		"vendor_name": "Amazon",
-		"invoice_date": "2026-01-12",
-		"amount": 118.25,
-		"description": "Printer paper and pens",
-		"metadata": {
-			"id": "invoice-010",
-			"invoice_ref": "INV-1010",
-			"raw_text": "Vendor: Amazon | Date: 2026-01-12 | Amount: 118.25 | Description: Printer paper and pens",
-			"line_items": [{"item": "Primary charge", "quantity": 1, "unit_price": 118.25}],
-			"anomaly_type": "none"
-		}
-	},
-	"state": {
-		"pointer": 0,
-		"remaining": 12,
-		"total_reward": 0.0,
-		"steps": 0
-	}
-}
-```
-
-### POST /api/step
-
-Steps the environment using user/agent action.
-
-Request:
-
-```json
-{
-	"action": {
-		"extracted_fields": {
-			"vendor_name": "Amazon",
-			"invoice_date": "2026-01-12"
-		},
-		"category": "Office Supplies",
-		"anomaly_flag": false
-	}
-}
-```
-
-Response includes `observation`, `reward`, `done`, `info`.
-
-### GET /api/state
-
-Returns current environment state and last step result.
-
-### POST /api/run-agent
-
-Runs full-batch agent processing and stores run in MongoDB.
-
-Request:
-
-```json
-{
-	"batch_size": 12,
-	"mode": "auto"
-}
-```
-
-Modes:
-
-- `auto`: OpenAI if key exists, else heuristic
-- `openai`: enforce OpenAI API
-- `heuristic`: offline local mode
-
-### GET /api/results
-
-Returns latest run and recent run history.
-
-## MongoDB Collections
-
-### invoices
-
-- vendor_name
-- invoice_date
-- amount
-- description
-- category
-- anomaly_flag
-
-### runs
-
-- run_id
-- mode
-- results
-- final_score
-- steps
-- timestamp
-
-## Demo UX Flow
-
-1. User clicks **Reset Environment**
-2. First invoice appears in Invoice Viewer
-3. User clicks **Run Agent** or **Next Step**
-4. UI updates with extracted fields, category, anomaly, reward
-5. Final chart and run summary appear after batch completion
+These endpoints allow both interactive stepping and full-episode automated agent runs.
 
 ## Deployment
 
-### Backend on Render
+### Docker
 
-- Use `backend/render.yaml`
-- Set Render env vars: `OPENAI_API_KEY`, `MONGO_URI`, `MONGO_DB_NAME`
-
-### Frontend on Vercel
-
-- Deploy `frontend` directory
-- Set `VITE_API_BASE_URL` to deployed backend URL
-- `frontend/vercel.json` handles SPA rewrites
-
-## Team Division
-
-### Person 1 (Backend Core)
-
-- FastAPI APIs
-- OpenEnv integration
-- MongoDB connection and state orchestration
-
-### Person 2 (AI + Data)
-
-- dataset generation
-- deterministic graders and reward logic
-- OpenAI agent prompt and parsing
-
-### Person 3 (Frontend + DevOps)
-
-- React dashboard UI
-- API integration and charting
-- deployment configs (Render + Vercel)
-
-## Screenshots (Placeholders)
-
-- `docs/screenshots/dashboard-overview.png`
-- `docs/screenshots/agent-output.png`
-- `docs/screenshots/results-chart.png`
-
-## Local Quality Checks
+The repository includes a root `Dockerfile` that installs core dependencies and runs the baseline script.
 
 ```bash
-python -m pytest -q
-python -m compileall backend
+docker build -t invoice-openenv .
+docker run --rm invoice-openenv
 ```
+
+### Hugging Face Spaces
+
+For Spaces Docker deployment:
+
+1. Use this repository as the Space source.
+2. Select Docker SDK.
+3. Set secrets (`OPENAI_API_KEY`) if using OpenAI mode.
+4. Optionally set `BASELINE_MODE=heuristic` for offline demo behavior.
+
+### Full-Stack Hosting
+
+- Backend: `backend/render.yaml` (Render)
+- Frontend: `frontend/vercel.json` (Vercel)
+
+## Validation Status
+
+- Deterministic synthetic dataset with duplicates and high-amount anomalies
+- Deterministic graders for all three tasks
+- Typed observation/action/reward models
+- OpenEnv metadata in `openenv.yaml`
+- Baseline script with OpenAI + offline fallback
+- Docker support included
+- Test suite passing (`14 passed`)
