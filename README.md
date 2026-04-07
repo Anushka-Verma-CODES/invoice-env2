@@ -153,8 +153,8 @@ class InvoiceObservation(BaseModel):
 
 class InvoiceAction(BaseModel):
     extracted_fields: Dict[str, str]
-    category: Optional[str]
-    anomaly_flag: Optional[bool]
+    category: Optional[str] = None
+    anomaly_flag: Optional[bool] = None
 
 class InvoiceReward(BaseModel):
     score: float
