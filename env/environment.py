@@ -44,8 +44,6 @@ class InvoiceEnv:
         self.logger = logger
         self.seed = seed
         self._rng = random.Random(seed)
-        if seed is not None:
-            random.seed(seed)
 
         self.invoices: List[Dict[str, Any]] = []
         self.pointer: int = 0
