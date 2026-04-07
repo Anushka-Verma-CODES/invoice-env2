@@ -1,8 +1,10 @@
 import random
-from typing import Tuple, Dict, Any, Optional
-from .models import InvoiceObservation, InvoiceAction, InvoiceReward
+from typing import Any, Dict, List, Optional, Tuple
+
 from .dataset import load_invoices
-from .graders import grade_extraction, grade_category, grade_anomaly
+from .graders import detection_metrics, grade_anomaly, grade_category, grade_extraction
+from .models import InvoiceAction, InvoiceObservation, InvoiceReward
+from .tasks import TASKS, compute_weighted_reward
 
 
 class InvoiceEnv:
@@ -23,7 +25,13 @@ class InvoiceEnv:
       One episode = batch of invoices (default batch_size=10).
     """
 
-    def __init__(self, batch_size: int = 10, seed: Optional[int] = None, shuffle: bool = True, logger: Optional[Any] = None):
+    def __init__(
+        self,
+        batch_size: int = 10,
+        seed: Optional[int] = None,
+        shuffle: bool = True,
+        logger: Optional[Any] = None,
+    ):
         """
         Args:
             batch_size: number of invoices per episode
@@ -34,14 +42,17 @@ class InvoiceEnv:
         self.batch_size = batch_size
         self.shuffle = shuffle
         self.logger = logger
-        if seed is not None:
-            random.seed(seed)
+        self.seed = seed
+        self._rng = random.Random(seed)
 
-        self.invoices: list[Dict[str, Any]] = []
+        self.invoices: List[Dict[str, Any]] = []
         self.pointer: int = 0
         self.current_invoice: Optional[Dict[str, Any]] = None
         self.total_reward: float = 0.0
         self.steps: int = 0
+        self.tp: int = 0
+        self.fp: int = 0
+        self.fn: int = 0
 
     def reset(self) -> InvoiceObservation:
         """
@@ -51,10 +62,16 @@ class InvoiceEnv:
             invoice_date, amount, description, and metadata.
         """
         dataset = load_invoices()
-        self.invoices = random.sample(dataset, self.batch_size) if self.shuffle else dataset[:self.batch_size]
+        if self.batch_size > len(dataset):
+            raise ValueError(f"batch_size {self.batch_size} exceeds dataset size {len(dataset)}")
+
+        self.invoices = self._rng.sample(dataset, self.batch_size) if self.shuffle else dataset[: self.batch_size]
         self.pointer = 0
         self.total_reward = 0.0
         self.steps = 0
+        self.tp = 0
+        self.fp = 0
+        self.fn = 0
         self.current_invoice = self.invoices[self.pointer]
         return self._make_observation(self.current_invoice)
 
@@ -71,27 +88,62 @@ class InvoiceEnv:
               - done (bool): True if episode finished
               - info (dict): ground truth labels and episode metadata
         """
+        if self.current_invoice is None:
+            raise RuntimeError("Environment is not initialized. Call reset() before step().")
+        if not isinstance(action, InvoiceAction):
+            action = InvoiceAction(**action)
+
         invoice = self.current_invoice
 
         # Deterministic grading
         extraction_score = grade_extraction(action.extracted_fields, invoice)
         category_score = grade_category(action.category, invoice)
-        anomaly_score = grade_anomaly(action.anomaly_flag, invoice)
+        try:
+            anomaly_score = grade_anomaly(
+                action.anomaly_flag,
+                invoice,
+                tp=self.tp,
+                fp=self.fp,
+                fn=self.fn,
+            )
+        except TypeError:
+            # Backward compatibility for monkeypatched 2-argument graders in tests.
+            anomaly_score = grade_anomaly(action.anomaly_flag, invoice)
 
-        # Weighted reward
-        total_score = (
-            0.4 * extraction_score +
-            0.3 * category_score +
-            0.3 * anomaly_score
+        truth_anomaly = bool(invoice.get("anomaly_flag", False))
+        pred_anomaly = bool(action.anomaly_flag) if action.anomaly_flag is not None else False
+
+        self.tp += int(pred_anomaly and truth_anomaly)
+        self.fp += int(pred_anomaly and not truth_anomaly)
+        self.fn += int((not pred_anomaly) and truth_anomaly)
+
+        missing_fields = sum(
+            1
+            for key in ("vendor_name", "invoice_date")
+            if not str(action.extracted_fields.get(key, "") or "").strip()
         )
+
+        reward_parts = compute_weighted_reward(
+            extraction_score=extraction_score,
+            category_score=category_score,
+            anomaly_score=anomaly_score,
+            missing_fields=missing_fields,
+            false_anomaly=pred_anomaly and not truth_anomaly,
+            missed_anomaly=(not pred_anomaly) and truth_anomaly,
+        )
+
+        total_score = reward_parts["final_score"]
 
         reward = InvoiceReward(
             score=total_score,
             details={
                 "extraction": extraction_score,
                 "category": category_score,
-                "anomaly": anomaly_score
-            }
+                "anomaly": anomaly_score,
+                "base_score": reward_parts["base_score"],
+                "penalty": reward_parts["penalty"],
+                "missing_fields": missing_fields,
+            },
         )
 
         # Update metrics
@@ -108,20 +160,30 @@ class InvoiceEnv:
         else:
             # Return a terminal observation for RL loop cleanliness
             next_obs = InvoiceObservation(
-                vendor_name="",
-                invoice_date="",
+                vendor_name="__terminal__",
+                invoice_date="1970-01-01",
                 amount=0.0,
-                description="",
-                metadata={"terminal": True}
+                description="Terminal observation",
+                metadata={"terminal": True},
             )
+
+        metrics = detection_metrics(self.tp, self.fp, self.fn)
 
         # Rich info dictionary
         info = {
             "invoice_id": invoice.get("id"),
             "ground_truth_category": invoice.get("category"),
             "ground_truth_anomaly": invoice.get("anomaly_flag"),
+            "task_context": {
+                "task_1_observation": "Raw invoice text for field extraction",
+                "task_2_observation": "Invoice metadata for categorization",
+                "task_3_observation": "Batch-level anomaly statistics",
+            },
             "step": self.steps,
-            "cumulative_reward": self.total_reward
+            "cumulative_reward": self.total_reward,
+            "anomaly_precision": metrics["precision"],
+            "anomaly_recall": metrics["recall"],
+            "anomaly_f1": metrics["f1"],
         }
 
         # Optional logging
@@ -145,16 +207,31 @@ class InvoiceEnv:
             "pointer": self.pointer,
             "remaining": len(self.invoices) - self.pointer,
             "total_reward": self.total_reward,
+            "average_reward": (self.total_reward / self.steps) if self.steps else 0.0,
             "steps": self.steps,
-            "current_invoice": self.current_invoice
+            "current_invoice": self.current_invoice,
+            "anomaly_counts": {"tp": self.tp, "fp": self.fp, "fn": self.fn},
+            "tasks": [task.__dict__ for task in TASKS],
         }
 
     def _make_observation(self, invoice: Dict[str, Any]) -> InvoiceObservation:
         """Helper to convert raw invoice dict into typed Observation."""
+        raw_text = (
+            f"Vendor: {invoice['vendor_name']} | "
+            f"Date: {invoice['invoice_date']} | "
+            f"Amount: {invoice['amount']} | "
+            f"Description: {invoice['description']}"
+        )
         return InvoiceObservation(
             vendor_name=invoice["vendor_name"],
             invoice_date=invoice["invoice_date"],
             amount=invoice["amount"],
             description=invoice["description"],
-            metadata={"id": self.pointer}
+            metadata={
+                "id": invoice["id"],
+                "invoice_ref": invoice["invoice_ref"],
+                "raw_text": raw_text,
+                "line_items": invoice.get("line_items", []),
+                "anomaly_type": invoice.get("anomaly_type", "none"),
+            },
         )
