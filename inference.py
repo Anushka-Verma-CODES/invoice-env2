@@ -3,9 +3,10 @@ import os
 from typing import Any, Dict, List, Optional
 
 from openai import OpenAI
+from pydantic import ValidationError
 
 from env.environment import InvoiceEnv
-from env.models import InvoiceAction
+from env.models import ALLOWED_CATEGORIES, InvoiceAction
 
 
 IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
@@ -94,21 +95,45 @@ def _to_action(raw_action: Dict[str, Any], observation: Dict[str, Any]) -> Invoi
         extracted = {}
 
     # Guardrails keep the run alive while preserving deterministic grading behavior.
-    extracted.setdefault("vendor_name", str(observation.get("vendor_name", "")))
-    extracted.setdefault("invoice_date", str(observation.get("invoice_date", "")))
+    vendor_name = str(extracted.get("vendor_name", observation.get("vendor_name", "")) or "")
+    invoice_date = str(extracted.get("invoice_date", observation.get("invoice_date", "")) or "")
 
     category = raw_action.get("category")
     if isinstance(category, list):
         category = "|".join(str(item) for item in category[:2])
+    if category is None:
+        category = _heuristic_category(observation)
+    else:
+        tokens = [piece.strip() for piece in str(category).replace("|", ",").split(",") if piece.strip()]
+        valid_tokens = [piece for piece in tokens if piece in ALLOWED_CATEGORIES]
+        category = "|".join(valid_tokens[:2]) if valid_tokens else _heuristic_category(observation)
 
-    return InvoiceAction(
-        extracted_fields={
-            "vendor_name": str(extracted.get("vendor_name", "")),
-            "invoice_date": str(extracted.get("invoice_date", "")),
-        },
-        category=category,
-        anomaly_flag=raw_action.get("anomaly_flag"),
-    )
+    anomaly_flag = raw_action.get("anomaly_flag")
+    if isinstance(anomaly_flag, str):
+        normalized = anomaly_flag.strip().lower()
+        if normalized in {"true", "1", "yes", "y"}:
+            anomaly_flag = True
+        elif normalized in {"false", "0", "no", "n"}:
+            anomaly_flag = False
+        else:
+            anomaly_flag = bool(normalized)
+
+    try:
+        return InvoiceAction(
+            extracted_fields={
+                "vendor_name": vendor_name,
+                "invoice_date": invoice_date,
+            },
+            category=category,
+            anomaly_flag=anomaly_flag,
+        )
+    except ValidationError:
+        fallback = _heuristic_action(observation)
+        return InvoiceAction(
+            extracted_fields=fallback["extracted_fields"],
+            category=fallback["category"],
+            anomaly_flag=fallback["anomaly_flag"],
+        )
 
 
 def _heuristic_category(observation: Dict[str, Any]) -> str:
