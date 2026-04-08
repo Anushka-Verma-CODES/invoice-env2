@@ -9,6 +9,7 @@ class TaskDefinition:
 	difficulty: str
 	description: str
 	grader: str
+	graders: List[str]
 
 
 TASKS: List[TaskDefinition] = [
@@ -18,6 +19,7 @@ TASKS: List[TaskDefinition] = [
 		difficulty="easy",
 		description="Extract vendor_name and invoice_date from invoice text.",
 		grader="env.graders.grade_extraction",
+		graders=["env.graders.grade_extraction"],
 	),
 	TaskDefinition(
 		id="expense_categorization",
@@ -25,6 +27,7 @@ TASKS: List[TaskDefinition] = [
 		difficulty="medium",
 		description="Classify invoice into Travel, Office Supplies, Utilities, or Misc.",
 		grader="env.graders.grade_category",
+		graders=["env.graders.grade_category"],
 	),
 	TaskDefinition(
 		id="anomaly_detection",
@@ -32,6 +35,7 @@ TASKS: List[TaskDefinition] = [
 		difficulty="hard",
 		description="Flag duplicates and unusually high amount invoices.",
 		grader="env.graders.grade_anomaly",
+		graders=["env.graders.grade_anomaly"],
 	),
 ]
 

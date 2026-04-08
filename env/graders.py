@@ -9,7 +9,17 @@ def _normalize(value: str) -> str:
 	return value.strip().lower()
 
 
+def _clamp_open_unit(value: float) -> float:
+    # Keep all task scores strictly within (0,1) to satisfy validator constraints.
+    return max(0.01, min(0.99, float(value)))
+
+
 def grade_extraction(extracted_fields: Dict[str, Any], invoice: Dict[str, Any]) -> float:
+    if not isinstance(extracted_fields, dict):
+        extracted_fields = {}
+    if not isinstance(invoice, dict):
+        invoice = {}
+
     required = ("vendor_name", "invoice_date")
     per_field_scores = []
 
@@ -27,10 +37,13 @@ def grade_extraction(extracted_fields: Dict[str, Any], invoice: Dict[str, Any]) 
         else:
             per_field_scores.append(0.01)  # minimal, not zero
 
-    return round(sum(per_field_scores) / len(required), 4)
+    return _clamp_open_unit(round(sum(per_field_scores) / len(required), 4))
 
 
 def grade_category(predicted_category: Optional[str], invoice: Dict[str, Any]) -> float:
+    if not isinstance(invoice, dict):
+        invoice = {}
+
     truth = invoice.get("category")
     if predicted_category is None:
         return 0.01
@@ -40,17 +53,17 @@ def grade_category(predicted_category: Optional[str], invoice: Dict[str, Any]) -
         return 0.01
 
     if tokens[0] == truth:
-        return 0.99
+        return _clamp_open_unit(0.99)
     if truth in tokens[:2]:
-        return 0.5
+        return _clamp_open_unit(0.5)
     close_pairs = {
         frozenset(("Travel", "Misc")),
         frozenset(("Office Supplies", "Misc")),
         frozenset(("Utilities", "Misc")),
     }
     if frozenset((tokens[0], truth)) in close_pairs:
-        return 0.5
-    return 0.01
+        return _clamp_open_unit(0.5)
+    return _clamp_open_unit(0.01)
 
 
 
@@ -70,6 +83,9 @@ def detection_metrics(tp: int, fp: int, fn: int) -> Dict[str, float]:
 
 
 def grade_anomaly(predicted_flag: Optional[bool], invoice: Dict[str, Any], *, tp: int, fp: int, fn: int) -> float:
+    if not isinstance(invoice, dict):
+        invoice = {}
+
     truth = bool(invoice.get("anomaly_flag", False))
     pred = bool(predicted_flag) if predicted_flag is not None else False
 
@@ -80,8 +96,8 @@ def grade_anomaly(predicted_flag: Optional[bool], invoice: Dict[str, Any], *, tp
     f1 = detection_metrics(next_tp, next_fp, next_fn)["f1"]
     # Clamp into (0,1)
     if f1 <= 0.0:
-        return 0.01
+        return _clamp_open_unit(0.01)
     if f1 >= 1.0:
-        return 0.99
-    return f1
+        return _clamp_open_unit(0.99)
+    return _clamp_open_unit(f1)
 
