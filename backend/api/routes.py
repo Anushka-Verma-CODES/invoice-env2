@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 
-from backend.api.schemas import ResetRequest, ResultsResponse, RunAgentRequest, StepRequest
-from backend.api import services
+from .schemas import ResetRequest, ResultsResponse, RunAgentRequest, StepRequest
+from . import services
 
 
 router = APIRouter(prefix="/api", tags=["invoice-platform"])
