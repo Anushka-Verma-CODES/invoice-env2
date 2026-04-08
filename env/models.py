@@ -84,6 +84,6 @@ class InvoiceReward(BaseModel):
     @field_validator("score")
     @classmethod
     def score_must_be_between_zero_and_one(cls, value: float) -> float:
-        if not 0.0 <= value <= 1.0:
+        if not 0.0 < value < 1.0:
             raise ValueError("score must be between 0.0 and 1.0")
         return value
