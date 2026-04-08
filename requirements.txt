@@ -4,6 +4,9 @@ uvicorn[standard]>=0.24.0,<1.0
 pydantic>=2.6,<3.0
 python-dotenv>=1.0.0,<2.0
 
+# OpenEnv Framework (required for validation)
+openenv-core>=0.1.0,<1.0
+
 # Data & Database
 pymongo>=4.6,<5.0
 rapidfuzz>=3.9,<4.0
