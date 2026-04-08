@@ -15,6 +15,12 @@ def _clamp_open_unit(value: float) -> float:
 
 
 def grade_extraction(extracted_fields: Dict[str, Any], invoice: Dict[str, Any]) -> float:
+    # Support validators that pass the full action payload as first arg.
+    if isinstance(extracted_fields, dict) and "extracted_fields" in extracted_fields:
+        nested = extracted_fields.get("extracted_fields")
+        if isinstance(nested, dict):
+            extracted_fields = nested
+
     if not isinstance(extracted_fields, dict):
         extracted_fields = {}
     if not isinstance(invoice, dict):
@@ -41,6 +47,10 @@ def grade_extraction(extracted_fields: Dict[str, Any], invoice: Dict[str, Any]) 
 
 
 def grade_category(predicted_category: Optional[str], invoice: Dict[str, Any]) -> float:
+    # Support validators that pass the full action payload as first arg.
+    if isinstance(predicted_category, dict):
+        predicted_category = predicted_category.get("category")
+
     if not isinstance(invoice, dict):
         invoice = {}
 
@@ -82,7 +92,18 @@ def detection_metrics(tp: int, fp: int, fn: int) -> Dict[str, float]:
 	}
 
 
-def grade_anomaly(predicted_flag: Optional[bool], invoice: Dict[str, Any], *, tp: int, fp: int, fn: int) -> float:
+def grade_anomaly(
+    predicted_flag: Optional[bool],
+    invoice: Dict[str, Any],
+    tp: int = 0,
+    fp: int = 0,
+    fn: int = 0,
+    **_: Any,
+) -> float:
+    # Support validators that pass the full action payload as first arg.
+    if isinstance(predicted_flag, dict):
+        predicted_flag = predicted_flag.get("anomaly_flag")
+
     if not isinstance(invoice, dict):
         invoice = {}
 
