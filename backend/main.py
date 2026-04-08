@@ -1,10 +1,15 @@
 import os
+import sys
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.api import services
-from backend.api.routes import router
+# Add backend dir to path so imports work
+sys.path.insert(0, str(Path(__file__).parent))
+
+from api import services
+from api.routes import router
 
 
 app = FastAPI(title="Invoice & Receipt Processing Platform", version="1.0.0")

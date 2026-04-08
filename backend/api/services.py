@@ -1,13 +1,21 @@
 import json
 import os
 import random
+import sys
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from openai import OpenAI
 
-from backend.db.mongo import get_invoices_collection, get_runs_collection
+# Add parent directories to path for imports
+backend_dir = Path(__file__).parent.parent
+root_dir = backend_dir.parent
+sys.path.insert(0, str(backend_dir))
+sys.path.insert(0, str(root_dir))
+
+from db.mongo import get_invoices_collection, get_runs_collection
 from env.dataset import load_invoices
 from env.environment import InvoiceEnv
 from env.models import InvoiceAction

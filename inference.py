@@ -3,15 +3,13 @@ import os
 from typing import Any, Dict, List, Optional
 
 from openai import OpenAI
-from pydantic import ValidationError
 
 from env.environment import InvoiceEnv
-from env.models import ALLOWED_CATEGORIES, InvoiceAction
+from env.models import InvoiceAction
 
 
 IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
-API_KEY = os.getenv("HF_TOKEN")
-USE_OPENAI = bool(API_KEY)
+API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 
 API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
 MODEL_NAME = os.getenv("MODEL_NAME") or "Qwen/Qwen2.5-72B-Instruct"
@@ -61,13 +59,13 @@ def _log_start(task: str, env: str, model: str) -> None:
 def _log_step(step: int, action: str, reward: float, done: bool, error: Optional[str]) -> None:
     error_val = error if error else "null"
     print(
-        f"[STEP]  step={step} action={action} reward={reward:.2f} "
+        f"[STEP] step={step} action={action} reward={reward:.2f} "
         f"done={str(done).lower()} error={error_val}",
         flush=True,
     )
 
 
-def _log_end(success: bool, steps: int, rewards: List[float]) -> None:
+def _log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
     rewards_str = ",".join(f"{r:.2f}" for r in rewards)
     print(
         f"[END] success={str(success).lower()} steps={steps} rewards={rewards_str}",
@@ -89,97 +87,35 @@ def _query_model(client: OpenAI, model_name: str, observation: Dict[str, Any]) -
     return _extract_json(content)
 
 
-def _to_action(raw_action: Any, observation: Dict[str, Any]) -> InvoiceAction:
-    if not isinstance(raw_action, dict):
-        raw_action = {}
-
+def _to_action(raw_action: Dict[str, Any], observation: Dict[str, Any]) -> InvoiceAction:
     extracted = raw_action.get("extracted_fields") or {}
     if not isinstance(extracted, dict):
         extracted = {}
 
     # Guardrails keep the run alive while preserving deterministic grading behavior.
-    vendor_name = str(extracted.get("vendor_name", observation.get("vendor_name", "")) or "")
-    invoice_date = str(extracted.get("invoice_date", observation.get("invoice_date", "")) or "")
+    extracted.setdefault("vendor_name", str(observation.get("vendor_name", "")))
+    extracted.setdefault("invoice_date", str(observation.get("invoice_date", "")))
 
     category = raw_action.get("category")
     if isinstance(category, list):
         category = "|".join(str(item) for item in category[:2])
-    if category is None:
-        category = _heuristic_category(observation)
-    else:
-        tokens = [piece.strip() for piece in str(category).replace("|", ",").split(",") if piece.strip()]
-        valid_tokens = [piece for piece in tokens if piece in ALLOWED_CATEGORIES]
-        category = "|".join(valid_tokens[:2]) if valid_tokens else _heuristic_category(observation)
 
-    anomaly_flag = raw_action.get("anomaly_flag")
-    if isinstance(anomaly_flag, str):
-        normalized = anomaly_flag.strip().lower()
-        if normalized in {"true", "1", "yes", "y"}:
-            anomaly_flag = True
-        elif normalized in {"false", "0", "no", "n"}:
-            anomaly_flag = False
-        else:
-            anomaly_flag = bool(normalized)
-
-    try:
-        return InvoiceAction(
-            extracted_fields={
-                "vendor_name": vendor_name,
-                "invoice_date": invoice_date,
-            },
-            category=category,
-            anomaly_flag=anomaly_flag,
-        )
-    except ValidationError:
-        fallback = _heuristic_action(observation)
-        return InvoiceAction(
-            extracted_fields=fallback["extracted_fields"],
-            category=fallback["category"],
-            anomaly_flag=fallback["anomaly_flag"],
-        )
-
-
-def _heuristic_category(observation: Dict[str, Any]) -> str:
-    vendor = str(observation.get("vendor_name", "")).lower()
-    description = str(observation.get("description", "")).lower()
-
-    if any(token in vendor for token in ("uber", "lyft", "airlines", "marriott")):
-        return "Travel"
-    if any(token in vendor for token in ("amazon", "staples", "ikea")):
-        return "Office Supplies"
-    if any(token in vendor for token in ("electricity", "water", "internet", "gas")):
-        return "Utilities"
-
-    if any(token in description for token in ("flight", "hotel", "ride", "transport")):
-        return "Travel|Misc"
-    if any(token in description for token in ("printer", "paper", "furniture", "desk", "chair")):
-        return "Office Supplies|Misc"
-    if any(token in description for token in ("electricity", "water", "internet", "utility", "gas")):
-        return "Utilities|Misc"
-
-    return "Misc"
-
-
-def _heuristic_action(observation: Dict[str, Any]) -> Dict[str, Any]:
-    metadata = observation.get("metadata", {}) or {}
-    invoice_ref = str(metadata.get("invoice_ref", "")).strip()
-
-    return {
-        "extracted_fields": {
-            "vendor_name": str(observation.get("vendor_name", "")),
-            "invoice_date": str(observation.get("invoice_date", "")),
+    return InvoiceAction(
+        extracted_fields={
+            "vendor_name": str(extracted.get("vendor_name", "")),
+            "invoice_date": str(extracted.get("invoice_date", "")),
         },
-        "category": _heuristic_category(observation),
-        "anomaly_flag": bool(invoice_ref and float(observation.get("amount", 0.0) or 0.0) > 2500.0),
-    }
+        category=category,
+        anomaly_flag=raw_action.get("anomaly_flag"),
+    )
 
 
 def run() -> None:
     rewards: List[float] = []
     steps_taken = 0
     success = False
+    score = 0.0
     done = False
-    env: Optional[InvoiceEnv] = None
 
     _log_start(task=TASK_NAME, env=BENCHMARK, model=MODEL_NAME)
 
@@ -190,7 +126,7 @@ def run() -> None:
         # Referenced for organizer compatibility when using image-backed environments.
         _ = IMAGE_NAME
 
-        client = OpenAI(api_key=API_KEY, base_url=API_BASE_URL) if USE_OPENAI else None
+        client = OpenAI(api_key=API_KEY, base_url=API_BASE_URL)
         env = InvoiceEnv(batch_size=BATCH_SIZE, seed=SEED, shuffle=True)
         observation = env.reset()
 
@@ -198,38 +134,35 @@ def run() -> None:
             step = steps_taken + 1
             obs_payload = observation.model_dump()
 
-            raw_action: Any
-            if client is not None:
-                try:
-                    raw_action = _query_model(client, MODEL_NAME, obs_payload)
-                except Exception:
-                    raw_action = _heuristic_action(obs_payload)
-            else:
-                raw_action = _heuristic_action(obs_payload)
-
+            error: Optional[str] = None
+            raw_action: Dict[str, Any]
             try:
-                action = _to_action(raw_action, obs_payload)
-            except Exception:
-                action = InvoiceAction(**_heuristic_action(obs_payload))
+                raw_action = _query_model(client, MODEL_NAME, obs_payload)
+            except Exception as exc:
+                error = str(exc)
+                raw_action = {
+                    "extracted_fields": {
+                        "vendor_name": obs_payload.get("vendor_name", ""),
+                        "invoice_date": obs_payload.get("invoice_date", ""),
+                    },
+                    "category": "Misc",
+                    "anomaly_flag": False,
+                }
+
+            action = _to_action(raw_action, obs_payload)
             action_str = json.dumps(action.model_dump(), separators=(",", ":"))
 
-            observation, reward, done, info = env.step(action)
+            observation, reward, done, _ = env.step(action)
             rewards.append(float(reward.score))
             steps_taken = step
 
-            # Spec-compliant step error field: environment last_action_error if present, else null.
-            step_error = info.get("last_action_error") if isinstance(info, dict) else None
+            _log_step(step=step, action=action_str, reward=float(reward.score), done=done, error=error)
 
-            _log_step(step=step, action=action_str, reward=float(reward.score), done=done, error=step_error)
-
-        success = done
+        score = sum(rewards) / len(rewards) if rewards else 0.0
+        score = min(max(score, 0.0), 1.0)
+        success = done and score >= 0.0
     finally:
-        if env is not None and hasattr(env, "close"):
-            try:
-                env.close()
-            except Exception:
-                pass
-        _log_end(success=success, steps=steps_taken, rewards=rewards)
+        _log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
 
 
 if __name__ == "__main__":

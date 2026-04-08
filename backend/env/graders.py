@@ -11,7 +11,7 @@ def _normalize(value: str) -> str:
 
 def _clamp_open_unit(value: float) -> float:
     # Keep all task scores strictly within (0,1) to satisfy validator constraints.
-    return max(0.01, min(0.99, float(value)))
+    return max(0.001, min(0.999, float(value)))
 
 
 def grade_extraction(extracted_fields: Dict[str, Any], invoice: Dict[str, Any]) -> float:
@@ -34,14 +34,14 @@ def grade_extraction(extracted_fields: Dict[str, Any], invoice: Dict[str, Any]) 
         truth = str(invoice.get(key, "") or "")
 
         if _normalize(pred) == _normalize(truth):
-            per_field_scores.append(0.99)  # almost perfect
+            per_field_scores.append(0.999)  # almost perfect
             continue
 
         ratio = fuzz.ratio(_normalize(pred), _normalize(truth))
         if ratio >= 80:
-            per_field_scores.append(round(min(0.98, ratio / 100.0), 4))  # partial but <1
+            per_field_scores.append(round(min(0.998, ratio / 100.0), 4))  # partial but <1
         else:
-            per_field_scores.append(0.01)  # minimal, not zero
+            per_field_scores.append(0.001)  # minimal, not zero
 
     return _clamp_open_unit(round(sum(per_field_scores) / len(required), 4))
 
@@ -56,14 +56,14 @@ def grade_category(predicted_category: Optional[str], invoice: Dict[str, Any]) -
 
     truth = invoice.get("category")
     if predicted_category is None:
-        return 0.01
+        return _clamp_open_unit(0.001)
 
     tokens = [piece.strip() for piece in predicted_category.replace("|", ",").split(",") if piece.strip()]
     if not tokens:
-        return 0.01
+        return _clamp_open_unit(0.001)
 
     if tokens[0] == truth:
-        return _clamp_open_unit(0.99)
+        return _clamp_open_unit(0.999)
     if truth in tokens[:2]:
         return _clamp_open_unit(0.5)
     close_pairs = {
@@ -73,7 +73,7 @@ def grade_category(predicted_category: Optional[str], invoice: Dict[str, Any]) -
     }
     if frozenset((tokens[0], truth)) in close_pairs:
         return _clamp_open_unit(0.5)
-    return _clamp_open_unit(0.01)
+    return _clamp_open_unit(0.001)
 
 
 
@@ -117,8 +117,8 @@ def grade_anomaly(
     f1 = detection_metrics(next_tp, next_fp, next_fn)["f1"]
     # Clamp into (0,1)
     if f1 <= 0.0:
-        return _clamp_open_unit(0.01)
+        return _clamp_open_unit(0.001)
     if f1 >= 1.0:
-        return _clamp_open_unit(0.99)
+        return _clamp_open_unit(0.999)
     return _clamp_open_unit(f1)
 
